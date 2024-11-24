@@ -13,6 +13,17 @@ using SV;
 
 namespace SVS_PostHClothingStatePersistence;
 
+public struct ActorAndHDC
+{
+    public ActorAndHDC(Actor a, HumanDataCoordinate ofit)
+    {
+        act = a;
+        outfit = ofit;
+    }
+    public Actor act;
+    public HumanDataCoordinate outfit;
+}
+
 public class HumanAndFrames
 {
     public HumanAndFrames(Human h, int f)
@@ -26,7 +37,7 @@ public class HumanAndFrames
 
 public struct ActorAndCSL
 {
-    public ActorAndCSL(Actor a, int ofit, ClothingStateList c)
+    public ActorAndCSL(Actor a, HumanDataCoordinate ofit, ClothingStateList c)
     {
         csl = new List<ClothingStateList>();
         outfit = ofit;
@@ -34,7 +45,7 @@ public struct ActorAndCSL
         csl.Add(c);
     }
     public Actor act;
-    public int outfit;
+    public HumanDataCoordinate outfit;
     public List<ClothingStateList> csl;
 }
 
@@ -61,6 +72,7 @@ public class Plugin : BasePlugin
     public static ConfigEntry<bool> EnabledPlayer { get; set; }
     public static ConfigEntry<bool> EnabledNPCs { get; set; }
     public static List<ClothingStateList> CSL;
+    public static List<ActorAndHDC> ListAAHDC;
 
     public static bool FirstADVManager = false;
     public static HScene HSceneInstance = null;
@@ -79,6 +91,7 @@ public class Plugin : BasePlugin
     {
         Log = base.Log;
         CSL = new List<ClothingStateList>();
+        ListAAHDC = new List<ActorAndHDC>();
         Act = new List<Actor>();
         ActorListDuration = new List<ActorAndCSL>();
         LateUpdateMatchHuman = new List<HumanAndFrames>();
@@ -140,10 +153,13 @@ public static class Hooks
 
             if (index != -1)
             {
-                int coord = HelperFunctions.GetCoord(ref __instance);
-                if (coord != Plugin.ActorListDuration[index].outfit)
+                HumanDataCoordinate HDC = HelperFunctions.GetCoordPub(ref __instance);
+                if (HDC != null)
                 {
-                    HelperFunctions.SetCoord(ref __instance, Plugin.ActorListDuration[index].outfit);
+                    if (!HelperFunctions.AreCoodinatesEqual(HDC, Plugin.ActorListDuration[index].outfit))
+                    {
+                        HelperFunctions.SetCoord(ref __instance, Plugin.ActorListDuration[index].outfit);
+                    }
                 }
 
                 foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
@@ -255,8 +271,7 @@ internal static class HelperFunctions
                     if (index == -1)
                     {
                         ClothingStateList csl = new ClothingStateList(ClothingSL.kind, ClothingSL.charaCloth, ClothingSL.state);
-                        Human h = a.chaCtrl;
-                        Plugin.ActorListDuration.Add(new ActorAndCSL(a, HelperFunctions.GetCoord(ref h), csl));
+                        Plugin.ActorListDuration.Add(new ActorAndCSL(a, Plugin.ListAAHDC.Find(x => x.act == a).outfit, csl));
                     }
                     else
                     {
@@ -265,8 +280,7 @@ internal static class HelperFunctions
                             Plugin.ActorListDuration[index].csl.Clear();
                             Plugin.ActorListDuration.Remove(Plugin.ActorListDuration[index]);
                             ClothingStateList csl2 = new ClothingStateList(ClothingSL.kind, ClothingSL.charaCloth, ClothingSL.state);
-                            Human h = a.chaCtrl;
-                            Plugin.ActorListDuration.Add(new ActorAndCSL(a, HelperFunctions.GetCoord(ref h), csl2));
+                            Plugin.ActorListDuration.Add(new ActorAndCSL(a, Plugin.ListAAHDC.Find(x => x.act == a).outfit, csl2));
                         }
                         else
                         {
@@ -294,9 +308,12 @@ internal static class HelperFunctions
             lock (Plugin.CSL_Lock)
             {
                 Plugin.CSL.Clear();
+                Plugin.ListAAHDC.Clear();
                 foreach (Actor chara in Plugin.Act)
                 {
                     Actor charaMain = chara.FindMainActorInstance().Value;
+                    Human h = chara.chaCtrl;
+                    Plugin.ListAAHDC.Add(new ActorAndHDC(charaMain, GetCoordPriv(ref h)));
                     if (charaMain == null) continue;
                     if ((charaMain == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) continue;
                     if ((charaMain != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) continue;
@@ -324,10 +341,13 @@ internal static class HelperFunctions
                 if ((a != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) return;
 
                 Human h = hc.human;
-                int coord = HelperFunctions.GetCoord(ref h);
-                if (coord != Plugin.ActorListDuration[index].outfit)
+                HumanDataCoordinate HDC = GetCoordPub(ref h);
+                if (HDC != null)
                 {
-                    HelperFunctions.SetCoord(ref h, Plugin.ActorListDuration[index].outfit);
+                    if (!AreCoodinatesEqual(HDC, Plugin.ActorListDuration[index].outfit))
+                    {
+                        SetCoord(ref h, Plugin.ActorListDuration[index].outfit);
+                    }
                 }
 
                 foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
@@ -341,37 +361,41 @@ internal static class HelperFunctions
         }
     }
 
-    public static void SetCoord(ref Human _selectedChara, int newVal)
+    public static HumanDataCoordinate GetCoordPriv(ref Human _selectedChara)
     {
-        _selectedChara.coorde.SetNowCoordinate(_selectedChara.data.Coordinates[newVal]);
+        if (_selectedChara == null) return null;
+        HumanDataCoordinate SavedHumanDataCoordinate = new HumanDataCoordinate();
+        if (_selectedChara.coorde.nowCoordinate != null)
+        {
+            SavedHumanDataCoordinate.Copy(_selectedChara.coorde.nowCoordinate);
+            Plugin.Log.LogInfo("GetCoord Returning nowCoordinate");
+            return SavedHumanDataCoordinate;
+        }
+        Plugin.Log.LogInfo("GetCoord Returning null!!");
+        return null;
+    }
+
+    public static HumanDataCoordinate GetCoordPub(ref Human _selectedChara)
+    {
+        if (_selectedChara == null) return null;
+        HumanDataCoordinate SavedHumanDataCoordinate = new HumanDataCoordinate();
+        if (_selectedChara.coorde.Now != null)
+        {
+            SavedHumanDataCoordinate.Copy(_selectedChara.coorde.Now);
+            Plugin.Log.LogInfo("GetCoord Returning Now");
+            return SavedHumanDataCoordinate;
+        }
+        Plugin.Log.LogInfo("GetCoord Returning null!!");
+        return null;
+    }
+
+    public static void SetCoord(ref Human _selectedChara, HumanDataCoordinate SHDC)
+    {
+        if (_selectedChara == null) return;
+        if (SHDC == null) return;
+        _selectedChara.coorde.SetNowCoordinate(SHDC);
         _selectedChara.ReloadCoordinate();
     }
-
-    public static int GetCoord(ref Human _selectedChara)
-    {
-        if (_selectedChara == null) return 0;
-        if (_selectedChara.coorde.Now == null) return 0;
-        //I don't know the difference between Now and nowCoodinate, so I try comparing both
-        for (int i = 0; i < _selectedChara.data.Coordinates.Length; i++)
-        {
-            if (AreCoodinatesEqual(_selectedChara.coorde.Now, _selectedChara.data.Coordinates[i]))
-            {
-                return i;
-            }
-        }
-
-        if (_selectedChara.coorde.nowCoordinate == null) return 0;
-        for (int i = 0; i < _selectedChara.data.Coordinates.Length; i++)
-        {
-            if (AreCoodinatesEqual(_selectedChara.coorde.nowCoordinate, _selectedChara.data.Coordinates[i]))
-            {
-                return i;
-            }
-        }
-
-        return 0;
-    }
-
 
     //I had to make this because the game always coppies coordinates so they return != if compared normally
     public static bool AreCoodinatesEqual(HumanDataCoordinate hdc1, HumanDataCoordinate hdc2)
