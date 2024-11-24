@@ -10,8 +10,6 @@ using SV.H;
 using Character;
 using SaveData;
 using SV;
-using static ChaFileDefine;
-using System.Runtime.InteropServices;
 
 namespace SVS_PostHClothingStatePersistence;
 
