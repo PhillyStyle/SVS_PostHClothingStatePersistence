@@ -9,21 +9,34 @@ using HarmonyLib;
 using SV.H;
 using Character;
 using SaveData;
-using System.Runtime.InteropServices;
 using SV;
-
+using static ChaFileDefine;
+using System.Runtime.InteropServices;
 
 namespace SVS_PostHClothingStatePersistence;
 
+public class HumanAndFrames
+{
+    public HumanAndFrames(Human h, int f)
+    {
+        hum = h;
+        frames = f;
+    }
+    public Human hum;
+    public int frames;
+}
+
 public struct ActorAndCSL
 {
-    public ActorAndCSL(Actor a, ClothingStateList c)
+    public ActorAndCSL(Actor a, int ofit, ClothingStateList c)
     {
         csl = new List<ClothingStateList>();
+        outfit = ofit;
         act = a;
         csl.Add(c);
     }
     public Actor act;
+    public int outfit;
     public List<ClothingStateList> csl;
 }
 
@@ -59,8 +72,9 @@ public class Plugin : BasePlugin
     public static Actor MainActor = null;
     public static bool ignoreThisUpdate = false;
     public static int curTimeZone = 0;
-    public static bool IsOpenADVAsync = false;
-    public static bool FirstAfterH = false;
+
+    public static List<HumanAndFrames> LateUpdateMatchHuman;
+    public static bool LateUpdateRunning = false;
 
     public override void Load()
     {
@@ -68,88 +82,76 @@ public class Plugin : BasePlugin
         CSL = new List<ClothingStateList>();
         Act = new List<Actor>();
         ActorListDuration = new List<ActorAndCSL>();
+        LateUpdateMatchHuman = new List<HumanAndFrames>();
 
         EnabledPlayer = Config.Bind("General", "Enable for Player", false, "Enable Post H Clothing State Persistance For Player.");
         EnabledNPCs = Config.Bind("General", "Enable for NPCs", true, "Enable Post H Clothing State Persistance For NPCs.");
 
         Harmony.CreateAndPatchAll(typeof(Hooks));
+        Harmony.CreateAndPatchAll(typeof(Hooks2));
     }
 }
 
 
 public static class Hooks
 {
+    public static bool isHookActivePHC = false;
     [HarmonyPostfix]
     [HarmonyPatch(typeof(Human), nameof(Human.LateUpdate))]
-    public static void Postfix_Human_LateUpdate(Human __instance)
+    public unsafe static void Postfix_Human_LateUpdate(ref Human __instance)
     {
-        if (Plugin.IsOpenADVAsync)
+        Human h = __instance;
+        int lumhIndex = Plugin.LateUpdateMatchHuman.FindIndex(x => x.hum == h);
+        if (lumhIndex != -1)
         {
-            Plugin.IsOpenADVAsync = false;
-
-            var talkManager = Manager.TalkManager._instance;
-            if (talkManager == null) return;
-            var npcs = new List<Actor>();
-
-            // PlayerHi and Npc1-4 contain copies of the Actors
-            if (talkManager.PlayerHi != null) npcs.Add(talkManager.PlayerHi);
-            if (talkManager.Npc1 != null) npcs.Add(talkManager.Npc1);
-            if (talkManager.Npc2 != null) npcs.Add(talkManager.Npc2);
-            if (talkManager.Npc3 != null) npcs.Add(talkManager.Npc3);
-            if (talkManager.Npc4 != null) npcs.Add(talkManager.Npc4);
-
-            //Here is where we strip the face to face actors
-            if (npcs.Count >= 2)
+            if (Plugin.LateUpdateMatchHuman[lumhIndex].frames > 0)
             {
-                foreach (Actor a in npcs)
-                {
-                    Actor mainA = a.FindMainActorInstance().Value;
-
-                    if (mainA == Plugin.MainActor) continue;
-                    if ((mainA != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) continue;
-
-                    int index = Plugin.ActorListDuration.FindIndex(x => x.act == mainA);
-
-                    if ((index != -1) || (Plugin.FirstAfterH))
-                    {
-                        if (index == -1)
-                        {
-                            Plugin.FirstAfterH = false;
-                            index = Plugin.ActorListDuration.Count - 1;
-                        }
-
-                        foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
-                        {
-                            a.chaCtrl.cloth.SetClothesState(ClothingSL.kind, ClothingSL.state, false);
-                        }
-                        Plugin.ignoreThisUpdate = true;
-                        a.chaCtrl.cloth.UpdateClothesStateAll();
-                    }
-                }
+                Plugin.LateUpdateMatchHuman[lumhIndex].frames--;
+                return;
             }
+            HumanAndFrames curHAndF = Plugin.LateUpdateMatchHuman[lumhIndex];
+            Plugin.LateUpdateMatchHuman.Remove(curHAndF);
+            Plugin.LateUpdateRunning = true;
+
+            Actor mainA = __instance.data.About.FindMainActorInstance().Value;
+            if (mainA == null) return;
+
+            if ((mainA == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) return;
+            if ((mainA != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) return;
+
+            int index = Plugin.ActorListDuration.FindIndex(x => x.act == mainA);
+
+            if (index != -1)
+            {
+                int coord = HelperFunctions.GetCoord(ref __instance);
+                if (coord != Plugin.ActorListDuration[index].outfit)
+                {
+                    HelperFunctions.SetCoord(ref __instance, Plugin.ActorListDuration[index].outfit);
+                }
+
+                foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
+                {
+                    Plugin.ignoreThisUpdate = true;
+                    __instance.cloth.SetClothesState(ClothingSL.kind, ClothingSL.state, false);
+                }
+                Plugin.ignoreThisUpdate = true;
+                __instance.cloth.UpdateClothesStateAll();
+            }
+            Plugin.LateUpdateRunning = false;
         }
     }
 
 
-
-
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(ADV.ADVManager), nameof(ADV.ADVManager.OpenADVAsync))]
-    public unsafe static void DoOpenADVAsync(ADV.ADVManager __instance, [DefaultParameterValue(null)] string asset, [DefaultParameterValue(0)] int charaID, [DefaultParameterValue(0)] int category, bool back = true)
-    {
-        Plugin.IsOpenADVAsync = true;
-    }
-
     [HarmonyPostfix]
     [HarmonyPatch(typeof(ConditionManager), nameof(ConditionManager.DayEnd))]
-    public unsafe static void DoDayEnd(ConditionManager __instance, [DefaultParameterValue(null)] Actor _actor)
+    public unsafe static void DoDayEnd(ref ConditionManager __instance, Actor _actor)
     {
         Plugin.ActorListDuration.Clear();
     }
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(SimulationUICtrl), nameof(SimulationUICtrl.SetTimeZone))]
-    public unsafe static void DoSetTimeZone(SimulationUICtrl __instance, [DefaultParameterValue(0)] int _timezone)
+    public unsafe static void DoSetTimeZone(ref SimulationUICtrl __instance, int _timezone)
     {
         if (Plugin.curTimeZone != _timezone)
         {
@@ -160,7 +162,7 @@ public static class Hooks
 
     [HarmonyPostfix]
     [HarmonyPatch(typeof(HScene), nameof(HScene.Start))]
-    private static void HSceneInitialize(HScene __instance)
+    private static void HSceneInitialize(ref HScene __instance)
     {
         if (Plugin.HSceneInstance == __instance) return;
         Plugin.HSceneInstance = __instance;
@@ -168,8 +170,53 @@ public static class Hooks
         foreach (HActor ha in __instance.Actors) Plugin.Act.Add(ha.Actor);
     }
 
-    //[HarmonyPostfix]
-    //[HarmonyPatch(typeof(HScene), nameof(HScene.Dispose))]
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.UpdateClothesStateAll))]
+    private static void DoUpdateClothesStateAll(ref HumanCloth __instance)
+    {
+        HelperFunctions.DoUpdateClothes(ref __instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.UpdateClothesAll))]
+    private static void DoUpdateClothesAll(ref HumanCloth __instance)
+    {
+        HelperFunctions.DoUpdateClothes(ref __instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.SetClothesState), new[] { typeof(ChaFileDefine.ClothesKind), typeof(ChaFileDefine.ClothesState), typeof(bool) })]
+    private unsafe static void DoSetClothesState(ref HumanCloth __instance, ChaFileDefine.ClothesKind kind, ChaFileDefine.ClothesState state, bool next = true)
+    {
+
+        HelperFunctions.DoUpdateClothes(ref __instance);
+    }
+
+    [HarmonyPostfix]
+    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.SetClothesStateAll))]
+    private unsafe static void DoSetClothesStateAll(ref HumanCloth __instance, ChaFileDefine.ClothesState state)
+    {
+        HelperFunctions.DoUpdateClothes(ref __instance);
+    }
+}
+
+[HarmonyPatch(typeof(Human))]
+public static class Hooks2
+{
+    // Patching the constructor with (IntPtr) signature
+    [HarmonyPatch(MethodType.Constructor, new Type[] { typeof(IntPtr) })]
+    [HarmonyPostfix]
+    public static void Postfix(ref Human __instance, IntPtr pointer)
+    {
+        if (Plugin.LateUpdateRunning) return; //Try to prevent any looping.
+        Plugin.LateUpdateMatchHuman.Add(new HumanAndFrames(__instance,5));
+    }
+
+}
+
+
+internal static class HelperFunctions
+{
     private static void HSceneEnd()
     {
         if ((!Plugin.EnabledPlayer.Value) && (!Plugin.EnabledNPCs.Value)) return;
@@ -178,7 +225,9 @@ public static class Hooks
         {
             foreach (ClothingStateList ClothingSL in Plugin.CSL.ToList())
             {
+                Plugin.ignoreThisUpdate = true;
                 ClothingSL.charaCloth.SetClothesState(ClothingSL.kind, ClothingSL.state, false);
+                Plugin.ignoreThisUpdate = true;
                 ClothingSL.charaCloth.UpdateClothesStateAll();
 
                 Actor a = ClothingSL.charaCloth.human.data.About.FindMainActorInstance().Value;
@@ -188,7 +237,8 @@ public static class Hooks
                     if (index == -1)
                     {
                         ClothingStateList csl = new ClothingStateList(ClothingSL.kind, ClothingSL.charaCloth, ClothingSL.state);
-                        Plugin.ActorListDuration.Add(new ActorAndCSL(a, csl));
+                        Human h = a.chaCtrl;
+                        Plugin.ActorListDuration.Add(new ActorAndCSL(a, HelperFunctions.GetCoord(ref h), csl));
                     }
                     else
                     {
@@ -197,7 +247,8 @@ public static class Hooks
                             Plugin.ActorListDuration[index].csl.Clear();
                             Plugin.ActorListDuration.Remove(Plugin.ActorListDuration[index]);
                             ClothingStateList csl2 = new ClothingStateList(ClothingSL.kind, ClothingSL.charaCloth, ClothingSL.state);
-                            Plugin.ActorListDuration.Add(new ActorAndCSL(a, csl2));
+                            Human h = a.chaCtrl;
+                            Plugin.ActorListDuration.Add(new ActorAndCSL(a, HelperFunctions.GetCoord(ref h), csl2));
                         }
                         else
                         {
@@ -210,21 +261,7 @@ public static class Hooks
         }
     }
 
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.UpdateClothesStateAll))]
-    private static void DoUpdateClothesStateAll(HumanCloth __instance)
-    {
-        DoUpdateClothes(__instance);
-    }
-
-    [HarmonyPostfix]
-    [HarmonyPatch(typeof(HumanCloth), nameof(HumanCloth.UpdateClothesAll))]
-    private static void DoUpdateClothesAll(HumanCloth __instance)
-    {
-        DoUpdateClothes(__instance);
-    }
-
-    private static void DoUpdateClothes(HumanCloth __instance)
+    public static void DoUpdateClothes(ref HumanCloth hc)
     {
         if ((!Plugin.EnabledPlayer.Value) && (!Plugin.EnabledNPCs.Value)) return;
         if (Plugin.ignoreThisUpdate)
@@ -241,13 +278,14 @@ public static class Hooks
                 Plugin.CSL.Clear();
                 foreach (Actor chara in Plugin.Act)
                 {
-                    if (chara.FindMainActorInstance().Value == null) continue;
-                    if ((chara.FindMainActorInstance().Value == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) continue;
-                    if ((chara.FindMainActorInstance().Value != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) continue;
+                    Actor charaMain = chara.FindMainActorInstance().Value;
+                    if (charaMain == null) continue;
+                    if ((charaMain == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) continue;
+                    if ((charaMain != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) continue;
 
                     foreach (ChaFileDefine.ClothesKind kind in Enum.GetValues(typeof(ChaFileDefine.ClothesKind)))
                     {
-                        Plugin.CSL.Add(new ClothingStateList(kind, chara.FindMainActorInstance().Value.chaCtrl.cloth, chara.chaCtrl.cloth.GetClothesStateType(kind)));
+                        Plugin.CSL.Add(new ClothingStateList(kind, charaMain.chaCtrl.cloth, chara.chaCtrl.cloth.GetClothesStateType(kind)));
                     }
                 }
             }
@@ -256,35 +294,165 @@ public static class Hooks
             {
                 Plugin.HSceneInstance = null;
                 HSceneEnd();
-                Plugin.FirstAfterH = true;
             }
         }
         else
         {
-            lock (Plugin.CSL_Lock)
+            Actor a = hc.human.data.About.FindMainActorInstance().Value;
+            int index = Plugin.ActorListDuration.FindIndex(x => x.act == a);
+            if (index != -1)
             {
-                Actor a = __instance.human.data.About.FindMainActorInstance().Value;
-                int index = Plugin.ActorListDuration.FindIndex(x => x.act == a);
-                if (index != -1)
-                {
-                    //Fix clothing
-                    if ((a == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) return;
-                    if ((a != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) return;
+                if ((a == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) return;
+                if ((a != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) return;
 
-                    foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
-                    {
-                        ClothingSL.charaCloth.SetClothesState(ClothingSL.kind, ClothingSL.state, false);
-                    }
-                    Plugin.ignoreThisUpdate = true;
-                    a.chaCtrl.cloth.UpdateClothesStateAll();
+                Human h = hc.human;
+                int coord = HelperFunctions.GetCoord(ref h);
+                if (coord != Plugin.ActorListDuration[index].outfit)
+                {
+                    HelperFunctions.SetCoord(ref h, Plugin.ActorListDuration[index].outfit);
                 }
+
+                foreach (ClothingStateList ClothingSL in Plugin.ActorListDuration[index].csl)
+                {
+                    Plugin.ignoreThisUpdate = true;
+                    a.chaCtrl.cloth.SetClothesState(ClothingSL.kind, ClothingSL.state, false);
+                }
+                Plugin.ignoreThisUpdate = true;
+                a.chaCtrl.cloth.UpdateClothesStateAll();
             }
         }
     }
-}
 
-internal static class HelperFunctions
-{
+    public static void SetCoord(ref Human _selectedChara, int newVal)
+    {
+        _selectedChara.coorde.SetNowCoordinate(_selectedChara.data.Coordinates[newVal]);
+        _selectedChara.ReloadCoordinate();
+    }
+
+    public static int GetCoord(ref Human _selectedChara)
+    {
+        if (_selectedChara == null) return 0;
+        if (_selectedChara.coorde.Now == null) return 0;
+        //I don't know the difference between Now and nowCoodinate, so I try comparing both
+        for (int i = 0; i < _selectedChara.data.Coordinates.Length; i++)
+        {
+            if (AreCoodinatesEqual(_selectedChara.coorde.Now, _selectedChara.data.Coordinates[i]))
+            {
+                return i;
+            }
+        }
+
+        if (_selectedChara.coorde.nowCoordinate == null) return 0;
+        for (int i = 0; i < _selectedChara.data.Coordinates.Length; i++)
+        {
+            if (AreCoodinatesEqual(_selectedChara.coorde.nowCoordinate, _selectedChara.data.Coordinates[i]))
+            {
+                return i;
+            }
+        }
+
+        return 0;
+    }
+
+
+    //I had to make this because the game always coppies coordinates so they return != if compared normally
+    public static bool AreCoodinatesEqual(HumanDataCoordinate hdc1, HumanDataCoordinate hdc2)
+    {
+        //Compare Accessories
+        //Return false if not the same number of accessories
+        if (hdc1.Accessory.parts.Length != hdc2.Accessory.parts.Length) return false;
+        for (int i = 0; i < hdc1.Accessory.parts.Length; i++)
+        {
+            //Return false if different IDs
+            if (hdc1.Accessory.parts[i].id != hdc2.Accessory.parts[i].id) return false;
+        }
+
+        //Compare Clothing
+        //Return false if not the same number of parts
+        if (hdc1.Clothes.parts.Length != hdc2.Clothes.parts.Length) return false;
+        for (int i = 0; i < hdc1.Clothes.parts.Length; i++)
+        {
+            //Return false if different IDs
+            if (hdc1.Clothes.parts[i].id != hdc2.Clothes.parts[i].id) return false;
+            if (hdc1.Clothes.parts[i].emblemeId != hdc2.Clothes.parts[i].emblemeId) return false;
+            if (hdc1.Clothes.parts[i].emblemeId2 != hdc2.Clothes.parts[i].emblemeId2) return false;
+            if (hdc1.Clothes.parts[i].paintInfos.Length != hdc2.Clothes.parts[i].paintInfos.Length) return false;
+            for (int j = 0; j < hdc1.Clothes.parts[i].paintInfos.Length; j++)
+            {
+                if (hdc1.Clothes.parts[i].paintInfos[j].ID != hdc2.Clothes.parts[i].paintInfos[j].ID) return false;
+                if (hdc1.Clothes.parts[i].paintInfos[j].color != hdc2.Clothes.parts[i].paintInfos[j].color) return false;
+                if (hdc1.Clothes.parts[i].paintInfos[j].layout != hdc2.Clothes.parts[i].paintInfos[j].layout) return false;
+            }
+        }
+
+        //Compare BodyMakeup
+        //Return false if not the same number of paintInfos
+        if (hdc1.BodyMakeup.paintInfos.Length != hdc2.BodyMakeup.paintInfos.Length) return false;
+        for (int i = 0; i < hdc1.BodyMakeup.paintInfos.Length; i++)
+        {
+            //Return false if different IDs
+            if (hdc1.BodyMakeup.paintInfos[i].layoutID != hdc2.BodyMakeup.paintInfos[i].layoutID) return false;
+        }
+
+        if (hdc1.BodyMakeup.nailInfo.colors.Length != hdc2.BodyMakeup.nailInfo.colors.Length) return false; //Dont think this one could happen but better check before assuming
+        for (int i = 0; i < hdc1.BodyMakeup.nailInfo.colors.Length; i++)
+        {
+            //Return false if different colors
+            if (hdc1.BodyMakeup.nailInfo.colors[i] != hdc2.BodyMakeup.nailInfo.colors[i]) return false;
+        }
+
+        if (hdc1.BodyMakeup.nailLegInfo.colors.Length != hdc2.BodyMakeup.nailLegInfo.colors.Length) return false; //Dont think this one could happen but better check before assuming
+        for (int i = 0; i < hdc1.BodyMakeup.nailLegInfo.colors.Length; i++)
+        {
+            //Return false if different colors
+            if (hdc1.BodyMakeup.nailLegInfo.colors[i] != hdc2.BodyMakeup.nailLegInfo.colors[i]) return false;
+        }
+
+        //Compare FaceMakeup
+        //Return false if not the same number of parts
+        if (hdc1.FaceMakeup.paintInfos.Length != hdc2.FaceMakeup.paintInfos.Length) return false;
+        for (int i = 0; i < hdc1.FaceMakeup.paintInfos.Length; i++)
+        {
+            //Return false if different IDs
+            if (hdc1.FaceMakeup.paintInfos[i].ID != hdc2.FaceMakeup.paintInfos[i].ID) return false;
+        }
+        if (hdc1.FaceMakeup.cheekColor != hdc2.FaceMakeup.cheekColor) return false;
+        if (hdc1.FaceMakeup.cheekHighlightColor != hdc2.FaceMakeup.cheekHighlightColor) return false;
+        if (hdc1.FaceMakeup.cheekId != hdc2.FaceMakeup.cheekId) return false;
+        if (hdc1.FaceMakeup.cheekPos != hdc2.FaceMakeup.cheekPos) return false;
+        if (hdc1.FaceMakeup.cheekRotation != hdc2.FaceMakeup.cheekRotation) return false;
+        if (hdc1.FaceMakeup.cheekSize != hdc2.FaceMakeup.cheekSize) return false;
+        if (hdc1.FaceMakeup.eyeshadowColor != hdc2.FaceMakeup.eyeshadowColor) return false;
+        if (hdc1.FaceMakeup.eyeshadowId != hdc2.FaceMakeup.eyeshadowId) return false;
+        if (hdc1.FaceMakeup.lipColor != hdc2.FaceMakeup.lipColor) return false;
+        if (hdc1.FaceMakeup.lipHighlightColor != hdc2.FaceMakeup.lipHighlightColor) return false;
+        if (hdc1.FaceMakeup.lipId != hdc2.FaceMakeup.lipId) return false;
+
+        //Compare Hair
+        if (hdc1.Hair.parts.Length != hdc2.Hair.parts.Length) return false;
+        for (int i = 0; i < hdc1.Hair.parts.Length; i++)
+        {
+            if (hdc1.Hair.parts[i].id != hdc2.Hair.parts[i].id) return false;
+            if (hdc1.Hair.parts[i].baseColor != hdc2.Hair.parts[i].baseColor) return false;
+            if (hdc1.Hair.parts[i].bundleId != hdc2.Hair.parts[i].bundleId) return false;
+            if (hdc1.Hair.parts[i].endColor != hdc2.Hair.parts[i].endColor) return false;
+            if (hdc1.Hair.parts[i].glossColor != hdc2.Hair.parts[i].glossColor) return false;
+            if (hdc1.Hair.parts[i].id != hdc2.Hair.parts[i].id) return false;
+            if (hdc1.Hair.parts[i].innerColor != hdc2.Hair.parts[i].innerColor) return false;
+            if (hdc1.Hair.parts[i].meshColor != hdc2.Hair.parts[i].meshColor) return false;
+            if (hdc1.Hair.parts[i].outlineColor != hdc2.Hair.parts[i].outlineColor) return false;
+            if (hdc1.Hair.parts[i].pos != hdc2.Hair.parts[i].pos) return false;
+            if (hdc1.Hair.parts[i].rot != hdc2.Hair.parts[i].rot) return false;
+            if (hdc1.Hair.parts[i].scl != hdc2.Hair.parts[i].scl) return false;
+            if (hdc1.Hair.parts[i].shadowColor != hdc2.Hair.parts[i].shadowColor) return false;
+            if (hdc1.Hair.parts[i].startColor != hdc2.Hair.parts[i].startColor) return false;
+            if (hdc1.Hair.parts[i].useInner != hdc2.Hair.parts[i].useInner) return false;
+            if (hdc1.Hair.parts[i].useMesh != hdc2.Hair.parts[i].useMesh) return false;
+        }
+
+        return true;
+    }
+
     public static KeyValuePair<int, Actor> FindMainActorInstance(this Actor x) => x?.charFile.About.FindMainActorInstance() ?? default;
 
     public static KeyValuePair<int, Actor> FindMainActorInstance(this HumanDataAbout x) => x == null ? default : Manager.Game.Charas.AsManagedEnumerable().FirstOrDefault(y => x.dataID == y.Value.charFile.About.dataID);
