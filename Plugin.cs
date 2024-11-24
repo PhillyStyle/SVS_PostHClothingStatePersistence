@@ -64,6 +64,7 @@ public class Plugin : BasePlugin
 
     public static bool FirstADVManager = false;
     public static HScene HSceneInstance = null;
+    public static float HSceneStartTime = 0;
     public static List<Actor> Act;
     public static List<ActorAndCSL> ActorListDuration;
     public static readonly object CSL_Lock = new object();
@@ -111,11 +112,29 @@ public static class Hooks
             Plugin.LateUpdateMatchHuman.Remove(curHAndF);
             Plugin.LateUpdateRunning = true;
 
-            Actor mainA = __instance.data.About.FindMainActorInstance().Value;
-            if (mainA == null) return;
+            if ((SV.H.HScene.Active()) && ((UnityEngine.Time.time - Plugin.HSceneStartTime) >= 1.0f))
+            {
+                Plugin.LateUpdateRunning = false;
+                return;
+            }
 
-            if ((mainA == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value)) return;
-            if ((mainA != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value)) return;
+            Actor mainA = __instance.data.About.FindMainActorInstance().Value;
+            if (mainA == null)
+            {
+                Plugin.LateUpdateRunning = false;
+                return;
+            }
+
+            if ((mainA == Plugin.MainActor) && (!Plugin.EnabledPlayer.Value))
+            {
+                Plugin.LateUpdateRunning = false;
+                return;
+            }
+            if ((mainA != Plugin.MainActor) && (!Plugin.EnabledNPCs.Value))
+            {
+                Plugin.LateUpdateRunning = false;
+                return;
+            }
 
             int index = Plugin.ActorListDuration.FindIndex(x => x.act == mainA);
 
@@ -164,6 +183,7 @@ public static class Hooks
     {
         if (Plugin.HSceneInstance == __instance) return;
         Plugin.HSceneInstance = __instance;
+        Plugin.HSceneStartTime = UnityEngine.Time.time;
 
         foreach (HActor ha in __instance.Actors) Plugin.Act.Add(ha.Actor);
     }
