@@ -368,10 +368,8 @@ internal static class HelperFunctions
         if (_selectedChara.coorde.nowCoordinate != null)
         {
             SavedHumanDataCoordinate.Copy(_selectedChara.coorde.nowCoordinate);
-            Plugin.Log.LogInfo("GetCoord Returning nowCoordinate");
             return SavedHumanDataCoordinate;
         }
-        Plugin.Log.LogInfo("GetCoord Returning null!!");
         return null;
     }
 
@@ -382,10 +380,8 @@ internal static class HelperFunctions
         if (_selectedChara.coorde.Now != null)
         {
             SavedHumanDataCoordinate.Copy(_selectedChara.coorde.Now);
-            Plugin.Log.LogInfo("GetCoord Returning Now");
             return SavedHumanDataCoordinate;
         }
-        Plugin.Log.LogInfo("GetCoord Returning null!!");
         return null;
     }
 
