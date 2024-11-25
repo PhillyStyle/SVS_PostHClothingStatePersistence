@@ -96,8 +96,8 @@ public class Plugin : BasePlugin
         ActorListDuration = new List<ActorAndCSL>();
         LateUpdateMatchHuman = new List<HumanAndFrames>();
 
-        EnabledPlayer = Config.Bind("General", "Enable for Player", false, "Enable Post H Clothing State Persistance For Player.");
-        EnabledNPCs = Config.Bind("General", "Enable for NPCs", true, "Enable Post H Clothing State Persistance For NPCs.");
+        EnabledPlayer = Config.Bind("General", "Enable for Player", false, "Enable Post H Clothing State Persistence For Player.");
+        EnabledNPCs = Config.Bind("General", "Enable for NPCs", true, "Enable Post H Clothing State Persistence For NPCs.");
 
         Harmony.CreateAndPatchAll(typeof(Hooks));
         Harmony.CreateAndPatchAll(typeof(Hooks2));
@@ -201,6 +201,7 @@ public static class Hooks
         Plugin.HSceneInstance = __instance;
         Plugin.HSceneStartTime = UnityEngine.Time.time;
 
+        Plugin.Act.Clear();
         foreach (HActor ha in __instance.Actors) Plugin.Act.Add(ha.Actor);
     }
 
